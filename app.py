@@ -81,8 +81,11 @@ class ImageService:
             self._config = ModelConfig()
             self._config.OUTPUT_ROOT = str(Path("./chest_xray_pipeline").resolve())
             
-            # Paths to possible checkpoints
-            ckpt_path = Path("./chest_xray_pipeline/checkpoints/best_model.pth")
+            # Paths to possible checkpoints (Check BEST first, then LAST)
+            best_path = Path("./chest_xray_pipeline/checkpoints/best_model.pth")
+            last_path = Path("./chest_xray_pipeline/checkpoints/last_model.pth")
+            
+            ckpt_path = best_path if best_path.exists() else last_path
             
             if ckpt_path.exists():
                 # Detect model type from checkpoint
@@ -107,8 +110,11 @@ class ImageService:
                     self.model = ChestXRayModel(self._config)
                     self.model.load_state_dict(checkpoint["model_state_dict"])
                 
+                # Detect the best available device (MPS for Mac)
+                device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+                self.model.to(device)
                 self.model.eval()
-                log.info(f"✓ Image model loaded from {ckpt_path}")
+                log.info(f"✓ Image model loaded and moved to {device} from {ckpt_path}")
             else:
                 log.warning("⚠ No checkpoint found — using untrained model for demo")
                 self.model = ChestXRayModel(self._config)

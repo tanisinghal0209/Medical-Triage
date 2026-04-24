@@ -14,18 +14,29 @@ from chest_xray_model import Trainer, ModelConfig
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-NIHS_ROOT = Path(os.environ.get("NIHS_ROOT", str(PROJECT_ROOT / "NIHS")))
-IMAGE_DIR = NIHS_ROOT / "images"
-DATA_ENTRY_CLEAN = NIHS_ROOT / "Data_Entry_2017.cleaned.csv"
-DATA_ENTRY_RAW = NIHS_ROOT / "Data_Entry_2017.csv"
-TRAIN_VAL_LIST = NIHS_ROOT / "train_val_list.cleaned.txt"
-TRAIN_VAL_RAW = NIHS_ROOT / "train_val_list.txt"
-TEST_LIST = NIHS_ROOT / "test_list.cleaned.txt"
-TEST_RAW = NIHS_ROOT / "test_list.txt"
+NIH_ROOT    = Path("/Users/tanishasinghal/Downloads/archive (2)")
+DATA_ENTRY  = NIH_ROOT / "Data_Entry_2017.csv"
+TRAIN_VAL_LIST = NIH_ROOT / "train_val_list.txt"
+TEST_LIST      = NIH_ROOT / "test_list.txt"
+
+# ── Dataset size toggle ───────────────────────────────────────────────────────
+# Set PERCENT_USED to a value between 0.0 and 1.0.
+# 1.0  = use the full dataset (~112k images)  — best accuracy, slow
+# 0.5  = use 50% of the dataset (~56k images) — good balance
+# 0.1  = use 10% of the dataset (~11k images) — fast prototyping / debugging
+PERCENT_USED: float = 1.0   # ← change this to control dataset size
 
 
-def resolve_path(primary: Path, fallback: Path) -> Path:
-    return primary if primary.exists() else fallback
+def build_image_map(nih_root: Path) -> dict:
+    """Scans all images_00x/images/ sub-folders and returns {filename: path}."""
+    image_map = {}
+    for i in range(1, 13):
+        folder = nih_root / f"images_{i:03d}" / "images"
+        if folder.exists():
+            for p in folder.iterdir():
+                if p.suffix.lower() in (".png", ".jpg", ".jpeg"):
+                    image_map[p.name] = p
+    return image_map
 
 
 def load_name_list(path: Path) -> Set[str]:
@@ -33,6 +44,18 @@ def load_name_list(path: Path) -> Set[str]:
         return set()
     with path.open("r", encoding="utf-8") as f:
         return {line.strip() for line in f if line.strip()}
+
+
+def sample_name_list(names: Set[str], percent: float, seed: int = 42) -> Set[str]:
+    """Returns a reproducible random subset of `names` of size = percent * len(names)."""
+    if percent <= 0.0 or percent > 1.0:
+        raise ValueError(f"PERCENT_USED must be in (0, 1]. Got: {percent}")
+    if percent == 1.0:
+        return names  # no sampling needed
+    import random
+    rng = random.Random(seed)
+    k = max(1, int(len(names) * percent))
+    return set(rng.sample(sorted(names), k))  # sorted() for reproducibility
 
 
 class NIHDataset(Dataset):
@@ -56,7 +79,7 @@ class NIHDataset(Dataset):
         self.df["Finding Labels"] = self.df["Finding Labels"].fillna("No Finding").astype(str)
         self.df = self.df.dropna(subset=["Finding Labels", "Image Index"]).reset_index(drop=True)
 
-        self.image_map = {p.name: p for p in self.image_dir.glob("*.png") if p.is_file()}
+        self.image_map = build_image_map(Path(image_dir))
         initial_count = len(self.df)
         self.df = self.df[self.df["Image Index"].isin(self.image_map.keys())].reset_index(drop=True)
 
@@ -93,12 +116,12 @@ class NIHDataset(Dataset):
 
 
 def start_training():
-    if not IMAGE_DIR.exists():
-        raise FileNotFoundError(f"Image directory not found: {IMAGE_DIR}")
+    if not NIH_ROOT.exists():
+        raise FileNotFoundError(f"NIH dataset not found: {NIH_ROOT}")
 
-    data_entry = resolve_path(DATA_ENTRY_CLEAN, DATA_ENTRY_RAW)
-    train_val_list = resolve_path(TRAIN_VAL_LIST, TRAIN_VAL_RAW)
-    test_list = resolve_path(TEST_LIST, TEST_RAW)
+    data_entry     = DATA_ENTRY
+    train_val_list = TRAIN_VAL_LIST
+    test_list      = TEST_LIST
 
     cfg = ModelConfig()
     cfg.NUM_CLASSES = 14
@@ -115,19 +138,26 @@ def start_training():
     ])
 
     train_val_names = load_name_list(train_val_list)
-    test_names = load_name_list(test_list)
+    test_names      = load_name_list(test_list)
 
     if not train_val_names:
         raise FileNotFoundError(f"Train/val list not found or empty: {train_val_list}")
 
+    # ── Apply PERCENT_USED sampling (in-memory only, files are never modified) ─
+    pct = max(0.01, min(1.0, PERCENT_USED))   # clamp to [0.01, 1.0]
+    train_val_names = sample_name_list(train_val_names, pct, seed=cfg.SEED)
+    test_names      = sample_name_list(test_names,      pct, seed=cfg.SEED) if test_names else set()
+    print(f"Dataset usage : {pct*100:.0f}%  "
+          f"({len(train_val_names)} train/val | {len(test_names)} test names)")
+
     train_val_dataset = NIHDataset(
-        IMAGE_DIR,
+        NIH_ROOT,
         data_entry,
         transform=transform,
         allowed_names=train_val_names,
     )
     test_dataset = NIHDataset(
-        IMAGE_DIR,
+        NIH_ROOT,
         data_entry,
         transform=transform,
         allowed_names=test_names if test_names else None,
@@ -138,8 +168,10 @@ def start_training():
     generator = torch.Generator().manual_seed(cfg.SEED)
     train_ds, val_ds = random_split(train_val_dataset, [train_size, val_size], generator=generator)
 
-    num_workers = 4 if torch.cuda.is_available() else 0
-    pin_memory = torch.cuda.is_available()
+    # MPS does not support pin_memory or multiple workers
+    is_cuda = torch.cuda.is_available()
+    num_workers = 4 if is_cuda else 0
+    pin_memory  = is_cuda
 
     loaders = {
         "train": DataLoader(
@@ -186,7 +218,7 @@ def start_training():
 
     trainer.start_epoch = start_epoch
     print("\nSTARTING TRAINING")
-    print(f"NIHS root: {NIHS_ROOT}")
+    print(f"NIH root : {NIH_ROOT}")
     print(f"Device   : {trainer.device}")
     print(f"Batch    : {cfg.BATCH_SIZE}")
     print(f"Train/Val: {len(train_val_dataset)} images total")

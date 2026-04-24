@@ -431,14 +431,23 @@ def generate_heatmap(
 
     # ── Resolve target layer ──────────────────────────────────────────────────
     if target_layer is None:
-        # Default: last residual block in ResNet50
-        # This produces 7×7 feature maps with 2048 channels — ideal for Grad-CAM
-        if hasattr(model, "backbone") and hasattr(model.backbone, "layer4"):
-            target_layer = model.backbone.layer4
-        else:
+        # Detect backbone type and pick appropriate target layer
+        if hasattr(model, "backbone"):
+            bb = model.backbone
+            if hasattr(bb, "layer4"):  # ResNet50
+                target_layer = bb.layer4
+            elif hasattr(bb, "features"):  # MobileNetV2
+                target_layer = bb.features[-1]
+            else:
+                # Fallback: try to find the last Conv2d layer
+                conv_layers = [m for m in bb.modules() if isinstance(m, nn.Conv2d)]
+                if conv_layers:
+                    target_layer = conv_layers[-1]
+        
+        if target_layer is None:
             raise ValueError(
-                "Cannot auto-detect target layer. "
-                "Pass target_layer explicitly (e.g., model.backbone.layer4)."
+                "Cannot auto-detect target layer for Grad-CAM. "
+                "Ensure model.backbone is available and contains features or layer4."
             )
 
     # ── Resolve class index ───────────────────────────────────────────────────

@@ -328,15 +328,15 @@ class MetricAccumulator:
         logits = np.concatenate(self._logits, axis=0)   # [N, C]
         labels = np.concatenate(self._labels, axis=0)   # [N, C]
         
-        # SAFETY CHECK: Remove any NaN values that might have crept into labels/logits
-        if np.isnan(labels).any():
-            mask = ~np.isnan(labels).any(axis=1)
-            labels = labels[mask]
-            logits = logits[mask]
+        # ── SANITIZE: replace NaN/Inf with 0, then force binary {0, 1} ────────
+        # MPS GPU can produce floating-point artifacts; sklearn needs strict
+        # binary int arrays to recognise multilabel-indicator format.
+        logits = np.nan_to_num(logits, nan=0.0, posinf=0.0, neginf=0.0)
+        labels = np.nan_to_num(labels, nan=0.0, posinf=0.0, neginf=0.0)
+        labels = (labels >= 0.5).astype(np.int32)  # force binary {0, 1}
             
         probs  = 1.0 / (1.0 + np.exp(-logits))          # sigmoid
-
-        preds  = (probs >= self.threshold).astype(int)
+        preds  = (probs >= self.threshold).astype(np.int32)
 
         # ── Exact-match accuracy ──────────────────────────────────────────────
         exact_match = (preds == labels).all(axis=1).mean()
@@ -812,6 +812,7 @@ def predict_image(
         model = ChestXRayModel(cfg).to(device)
         checkpoint = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(checkpoint["model_state_dict"])
+        model.to(device)  # Re-enforce device just in case
         log.info(f"Model loaded from checkpoint: {ckpt_path}")
 
     model.eval()
