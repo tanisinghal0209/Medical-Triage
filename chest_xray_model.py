@@ -78,6 +78,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 # ==============================================================================
@@ -89,7 +90,7 @@ class ModelConfig:
     All hyperparameters in one place. Edit here only.
     """
     # ── PATHS (mirror Step 1 OUTPUT_ROOT) ────────────────────────────────────
-    OUTPUT_ROOT: str = "./chest_xray_pipeline"
+    OUTPUT_ROOT: str = str(PROJECT_ROOT / "chest_xray_pipeline")
 
     # ── MODEL ────────────────────────────────────────────────────────────────
     BACKBONE: str          = "mobilenet_v2" # "mobilenet_v2" or "resnet50"
@@ -249,6 +250,10 @@ class ChestXRayModel(nn.Module):
         return sum(p.numel() for p in params)
 
 
+# Backward-compatible alias used by older helper functions in this file.
+ChestXRayResNet50 = ChestXRayModel
+
+
 # ==============================================================================
 # SECTION 3 — LOSS FUNCTION WITH CLASS BALANCING
 # ==============================================================================
@@ -344,22 +349,29 @@ class MetricAccumulator:
         f1_per   = f1_score(labels, preds, average=None, zero_division=0)
 
         # ── AUROC (skip classes with no positive samples in batch) ────────────
-        valid_cols = labels.sum(axis=0) > 0
+        # AUROC requires both positive and negative samples per class.
+        valid_cols = np.array([
+            np.unique(labels[:, i]).size > 1 for i in range(labels.shape[1])
+        ])
         if valid_cols.sum() > 0:
-            auroc = roc_auc_score(
-                labels[:, valid_cols],
-                probs[:, valid_cols],
-                average="macro",
-            )
-            auroc_per = roc_auc_score(
-                labels[:, valid_cols],
-                probs[:, valid_cols],
-                average=None,
-            )
-            auroc_dict = {
-                self.classes[i]: float(auroc_per[j])
-                for j, i in enumerate(np.where(valid_cols)[0])
-            }
+            try:
+                auroc = roc_auc_score(
+                    labels[:, valid_cols],
+                    probs[:, valid_cols],
+                    average="macro",
+                )
+                auroc_per = roc_auc_score(
+                    labels[:, valid_cols],
+                    probs[:, valid_cols],
+                    average=None,
+                )
+                auroc_dict = {
+                    self.classes[i]: float(auroc_per[j])
+                    for j, i in enumerate(np.where(valid_cols)[0])
+                }
+            except ValueError:
+                auroc = 0.0
+                auroc_dict = {}
         else:
             auroc = 0.0
             auroc_dict = {}
@@ -617,7 +629,8 @@ class Trainer:
         log.info(f"  Device: {self.device} | AMP: {self.scaler is not None}")
         log.info("=" * 60)
 
-        for epoch in range(1, self.cfg.EPOCHS + 1):
+        start_epoch = getattr(self, "start_epoch", 1)
+        for epoch in range(start_epoch, self.cfg.EPOCHS + 1):
             t0 = time.time()
             log.info(f"\n── EPOCH {epoch}/{self.cfg.EPOCHS} "
                      f"(LR={self.optimizer.param_groups[0]['lr']:.2e}) ──")
@@ -796,7 +809,7 @@ def predict_image(
                 f"Checkpoint not found: {ckpt_path}\n"
                 "Run trainer.fit() first or pass a trained model."
             )
-        model = ChestXRayResNet50(cfg).to(device)
+        model = ChestXRayModel(cfg).to(device)
         checkpoint = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(checkpoint["model_state_dict"])
         log.info(f"Model loaded from checkpoint: {ckpt_path}")
@@ -1038,7 +1051,7 @@ def load_model(
         model = load_model("/content/chest_xray_pipeline/checkpoints/best_model.pth")
         results = predict_image("xray.jpg", model=model)
     """
-    model = ChestXRayResNet50(cfg).to(device)
+    model = ChestXRayModel(cfg).to(device)
     ckpt  = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
@@ -1068,7 +1081,7 @@ def _run_smoke_test() -> None:
     fake_labels = (torch.rand(B, N_CLS) > 0.7).float()
 
     # ── Forward pass ──────────────────────────────────────────────────────────
-    model = ChestXRayResNet50(mcfg).to(DEVICE)
+    model = ChestXRayModel(mcfg).to(DEVICE)
     logits = model(fake_imgs.to(DEVICE))
     assert logits.shape == (B, N_CLS), f"Unexpected output shape: {logits.shape}"
     log.info(f"  Forward pass OK — output shape: {logits.shape}")
