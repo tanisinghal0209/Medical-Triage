@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedVision AI — Clinical Decision Support</title>
+    <meta name="description" content="AI-powered chest X-ray analysis with disease prediction, Grad-CAM heatmaps, clinical NER, and triage scoring.">
+    
+    <!-- Bootstrap 5 & Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --primary: #6c5ce7;
+            --primary-glow: rgba(108, 92, 231, 0.3);
+            --accent: #00cec9;
+            --danger: #ff7675;
+            --warning: #fab1a0;
+            --success: #55efc4;
+            --surface: #1e1e2e;
+            --surface2: #252538;
+            --text: #e2e2f0;
+            --text-muted: #a0a0c0;
+            --glass: rgba(30, 30, 46, 0.75);
+            --border: rgba(255, 255, 255, 0.08);
+            --radius: 20px;
+            --shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        body {
+            background: radial-gradient(circle at top right, #1a1a2e, #0f0f1a);
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        h1, h2, h3, .outfit { font-family: 'Outfit', sans-serif; }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--surface); }
+        ::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--primary); }
+
+        /* Glassmorphism Components */
+        .glass-card {
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glass-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(108, 92, 231, 0.3);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Hero Header */
+        .hero {
+            padding: 3rem 0 2rem;
+            text-align: center;
+            background: linear-gradient(180deg, rgba(108, 92, 231, 0.05) 0%, transparent 100%);
+        }
+        .hero h1 {
+            font-size: 3rem;
+            font-weight: 800;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #fff 30%, var(--primary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .hero p {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* Upload Zone */
+        .upload-zone {
+            border: 2px dashed rgba(108, 92, 231, 0.3);
+            border-radius: var(--radius);
+            padding: 3rem 1rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .upload-zone:hover, .upload-zone.dragover {
+            border-color: var(--primary);
+            background: var(--primary-glow);
+            transform: scale(1.01);
+        }
+        .upload-zone i {
+            font-size: 3.5rem;
+            color: var(--primary);
+            margin-bottom: 1rem;
+            display: block;
+        }
+        .upload-zone.has-file {
+            border-style: solid;
+            border-color: var(--success);
+            background: rgba(85, 239, 196, 0.05);
+        }
+
+        .preview-img-container {
+            position: relative;
+            margin-top: 1.5rem;
+            display: inline-block;
+        }
+        .preview-img {
+            max-height: 220px;
+            border-radius: 12px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.5);
+            border: 2px solid var(--border);
+        }
+        .remove-img {
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            background: var(--danger);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 25px;
+            height: 25px;
+            line-height: 25px;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+
+        /* Inputs */
+        .form-control {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 12px;
+            padding: 1rem;
+            transition: all 0.3s;
+        }
+        .form-control:focus {
+            background: var(--surface2);
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px var(--primary-glow);
+            color: #fff;
+        }
+        textarea.form-control {
+            min-height: 180px;
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+
+        /* Action Button */
+        .btn-analyze {
+            background: linear-gradient(135deg, var(--primary), #a29bfe);
+            border: none;
+            padding: 1rem 3rem;
+            font-weight: 700;
+            border-radius: 50px;
+            font-size: 1.1rem;
+            color: #fff;
+            box-shadow: 0 10px 30px var(--primary-glow);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .btn-analyze:hover {
+            transform: translateY(-3px) scale(1.05);
+            box-shadow: 0 15px 40px var(--primary-glow);
+            color: #fff;
+        }
+        .btn-analyze:active { transform: scale(0.98); }
+        .btn-analyze:disabled { opacity: 0.6; transform: none; }
+
+        /* Results Layout */
+        #results { display: none; }
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0.75rem;
+        }
+        .section-header h3 {
+            font-size: 1.2rem;
+            margin: 0;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .section-header h3 i { color: var(--accent); }
+
+        /* Disease Prediction Bars */
+        .disease-item { margin-bottom: 1.2rem; }
+        .disease-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            font-weight: 500;
+            margin-bottom: 0.4rem;
+        }
+        .progress {
+            height: 10px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+            overflow: visible;
+        }
+        .progress-bar {
+            border-radius: 10px;
+            position: relative;
+            transition: width 1.5s cubic-bezier(0.1, 0.5, 0.1, 1);
+        }
+        .progress-bar::after {
+            content: '';
+            position: absolute;
+            top: 0; right: 0; bottom: 0; left: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            animation: shine 2s infinite;
+        }
+        @keyframes shine { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+        .bg-high { background: linear-gradient(90deg, #ff7675, #d63031); box-shadow: 0 0 15px rgba(214, 48, 49, 0.4); }
+        .bg-med { background: linear-gradient(90deg, #fdcb6e, #e17055); box-shadow: 0 0 15px rgba(225, 112, 85, 0.4); }
+        .bg-low { background: linear-gradient(90deg, #55efc4, #00b894); }
+
+        /* Triage Score Circle */
+        .triage-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+        }
+        .score-circle {
+            position: relative;
+            width: 150px;
+            height: 150px;
+            margin-bottom: 1.5rem;
+        }
+        .score-circle svg {
+            transform: rotate(-90deg);
+            width: 150px;
+            height: 150px;
+        }
+        .score-circle circle {
+            fill: none;
+            stroke-width: 10;
+            stroke-linecap: round;
+        }
+        .score-circle .bg { stroke: rgba(255,255,255,0.05); }
+        .score-circle .val {
+            stroke: var(--primary);
+            stroke-dasharray: 440;
+            stroke-dashoffset: 440;
+            transition: stroke-dashoffset 2s ease-out;
+        }
+        .score-text {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+        .score-num { font-size: 2.5rem; font-weight: 800; line-height: 1; }
+        .score-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+
+        .urgency-badge {
+            padding: 0.5rem 1.5rem;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        .urgency-1 { background: rgba(214, 48, 49, 0.2); color: #ff7675; border: 1px solid #ff7675; }
+        .urgency-2 { background: rgba(225, 112, 85, 0.2); color: #fab1a0; border: 1px solid #fab1a0; }
+        .urgency-3 { background: rgba(253, 203, 110, 0.2); color: #ffeaa7; border: 1px solid #ffeaa7; }
+        .urgency-4 { background: rgba(0, 184, 148, 0.2); color: #55efc4; border: 1px solid #55efc4; }
+        .urgency-5 { background: rgba(160, 160, 192, 0.1); color: #a0a0c0; border: 1px solid #a0a0c0; }
+
+        /* Entities Chips */
+        .entity-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.4rem 0.8rem;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin: 0.3rem;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+        }
+        .entity-chip:hover { transform: translateY(-2px); }
+        .chip-symptoms { background: rgba(255, 118, 117, 0.1); color: #ff7675; border-color: rgba(255, 118, 117, 0.2); }
+        .chip-diseases { background: rgba(108, 92, 231, 0.1); color: #a29bfe; border-color: rgba(108, 92, 231, 0.2); }
+        .chip-medications { background: rgba(0, 206, 201, 0.1); color: #00cec9; border-color: rgba(0, 206, 201, 0.2); }
+        .chip-risk_factors { background: rgba(253, 203, 110, 0.1); color: #ffeaa7; border-color: rgba(253, 203, 110, 0.2); }
+
+        /* Summary */
+        .summary-content {
+            font-size: 1rem;
+            line-height: 1.8;
+            color: #d1d1e0;
+            padding: 1.5rem;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 15px;
+            border-left: 4px solid var(--primary);
+        }
+
+        /* Heatmap Container */
+        .heatmap-container {
+            position: relative;
+            border-radius: 15px;
+            overflow: hidden;
+            background: #000;
+            min-height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .heatmap-container img { width: 100%; height: auto; display: block; }
+        .heatmap-overlay-toggle {
+            position: absolute;
+            bottom: 15px; right: 15px;
+            z-index: 10;
+        }
+
+        /* Loading Spinner Overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(10, 10, 20, 0.9);
+            backdrop-filter: blur(10px);
+            z-index: 2000;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .spinner-outer {
+            width: 100px; height: 100px;
+            border: 4px solid rgba(108, 92, 231, 0.1);
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 2rem;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .loading-steps { text-align: center; max-width: 300px; }
+        .step-item { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.5rem; transition: all 0.3s; }
+        .step-item.active { color: #fff; font-weight: 600; transform: scale(1.1); }
+        .step-item.completed { color: var(--success); }
+
+        /* Error States */
+        .card-error {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 2rem;
+            color: var(--danger);
+        }
+        .card-error i { font-size: 2.5rem; margin-bottom: 1rem; opacity: 0.7; }
+        .card-error p { font-size: 0.85rem; color: var(--text-muted); margin: 0; }
+
+        /* Responsive Utilities */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2rem; }
+            .btn-analyze { width: 100%; }
+        }
+
+        /* Animations */
+        .fade-up { animation: fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .stagger-1 { animation-delay: 0.1s; }
+        .stagger-2 { animation-delay: 0.2s; }
+        .stagger-3 { animation-delay: 0.3s; }
+    </style>
+</head>
+<body>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="spinner-outer"></div>
+        <div class="loading-steps outfit">
+            <h4 class="mb-4">Orchestrating Pipeline...</h4>
+            <div id="step-0" class="step-item">Pre-processing clinical inputs</div>
+            <div id="step-1" class="step-item">Running chest X-ray classifier</div>
+            <div id="step-2" class="step-item">Generating Grad-CAM attention maps</div>
+            <div id="step-3" class="step-item">Extracting clinical entities (NER)</div>
+            <div id="step-4" class="step-item">Synthesizing clinical summary</div>
+            <div id="step-5" class="step-item">Computing multi-modal triage score</div>
+        </div>
+    </div>
+
+    <!-- Hero Section -->
+    <header class="hero">
+        <div class="container">
+            <div class="mb-3">
+                <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-20 px-3 py-2 outfit">
+                    <i class="bi bi-shield-check me-2"></i>Medical Grade AI
+                </span>
+            </div>
+            <h1>MedVision AI</h1>
+            <p>A multi-modal clinical decision support system integrating deep learning for chest X-ray interpretation and clinical text analysis.</p>
+        </div>
+    </header>
+
+    <main class="container-lg pb-5">
+        <!-- Input Grid -->
+        <div class="row g-4 mb-5">
+            <!-- X-Ray Upload -->
+            <div class="col-md-6">
+                <div class="glass-card p-4 h-100 fade-up">
+                    <div class="section-header">
+                        <h3><i class="bi bi-image"></i> Radiological Input</h3>
+                        <span class="text-muted small outfit">DICOM/PNG/JPG</span>
+                    </div>
+                    <div class="upload-zone" id="dropZone" onclick="document.getElementById('imageInput').click()">
+                        <div id="uploadContent">
+                            <i class="bi bi-cloud-arrow-up"></i>
+                            <h5 class="outfit">Scan or Upload X-Ray</h5>
+                            <p class="text-muted small mb-0">Drag and drop patient imaging files here</p>
+                        </div>
+                        <div id="previewContainer" class="preview-img-container d-none">
+                            <button class="remove-img" onclick="event.stopPropagation(); removeImage()"><i class="bi bi-x"></i></button>
+                            <img id="imagePreview" class="preview-img" alt="X-ray Preview">
+                        </div>
+                        <input type="file" id="imageInput" accept="image/*" class="d-none">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Clinical Text -->
+            <div class="col-md-6">
+                <div class="glass-card p-4 h-100 fade-up stagger-1">
+                    <div class="section-header">
+                        <h3><i class="bi bi-file-earmark-medical"></i> Clinical Presentation</h3>
+                        <button class="btn btn-sm btn-outline-secondary outfit" style="font-size: 0.7rem;" onclick="loadExample()">LOAD EXAMPLE</button>
+                    </div>
+                    <div class="mb-3">
+                        <textarea id="clinicalText" class="form-control" placeholder="Enter patient history, symptoms, and physical exam findings..."></textarea>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <span class="badge bg-white bg-opacity-5 text-muted fw-normal">Structured Extraction Active</span>
+                        <span class="badge bg-white bg-opacity-5 text-muted fw-normal">BioBERT Summarization</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Analyze Button -->
+        <div class="text-center mb-5 fade-up stagger-2">
+            <button class="btn btn-analyze" id="analyzeBtn" onclick="performAnalysis()">
+                <i class="bi bi-lightning-charge-fill me-2"></i>Initiate Full Diagnostic Pipeline
+            </button>
+        </div>
+
+        <!-- Results Dashboard -->
+        <div id="results" class="row g-4">
+            <!-- Row 1: Disease Probs & Heatmap -->
+            <div class="col-lg-7">
+                <div class="glass-card p-4 h-100 fade-up">
+                    <div class="section-header">
+                        <h3><i class="bi bi-activity"></i> Findings Probability</h3>
+                        <span id="timePred" class="badge bg-white bg-opacity-5 text-muted outfit">0.0s</span>
+                    </div>
+                    <div id="diseaseList">
+                        <!-- Bars will be injected here -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-5">
+                <div class="glass-card p-4 h-100 fade-up stagger-1">
+                    <div class="section-header">
+                        <h3><i class="bi bi-cpu"></i> Grad-CAM Interpretability</h3>
+                        <span id="timeHeatmap" class="badge bg-white bg-opacity-5 text-muted outfit">0.0s</span>
+                    </div>
+                    <div class="heatmap-container" id="heatmapContainer">
+                        <!-- Heatmap will be injected here -->
+                        <p class="text-muted outfit small">Awaiting image processing...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Row 2: Triage & Entities -->
+            <div class="col-lg-4">
+                <div class="glass-card p-4 h-100 fade-up stagger-2">
+                    <div class="section-header">
+                        <h3><i class="bi bi-heart-pulse"></i> Triage Index</h3>
+                        <span id="timeTriage" class="badge bg-white bg-opacity-5 text-muted outfit">0.0s</span>
+                    </div>
+                    <div class="triage-container" id="triageContent">
+                        <!-- Triage dial injected here -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-8">
+                <div class="glass-card p-4 h-100 fade-up stagger-3">
+                    <div class="section-header">
+                        <h3><i class="bi bi-tags"></i> Semantic NER Extraction</h3>
+                        <span id="timeNER" class="badge bg-white bg-opacity-5 text-muted outfit">0.0s</span>
+                    </div>
+                    <div id="entityContent">
+                        <!-- Entities injected here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Row 3: Summary -->
+            <div class="col-12">
+                <div class="glass-card p-4 fade-up">
+                    <div class="section-header">
+                        <h3><i class="bi bi-journal-text"></i> Automated Clinical Summary</h3>
+                        <span id="timeSummary" class="badge bg-white bg-opacity-5 text-muted outfit">0.0s</span>
+                    </div>
+                    <div id="summaryContent">
+                        <!-- Summary injected here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Total Timing -->
+            <div class="col-12 text-center py-4">
+                <div class="text-muted small outfit">
+                    Total Pipeline Execution: <span id="totalTime" class="text-white fw-bold">0.00s</span>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="text-center py-5">
+        <div class="container border-top border-white border-opacity-5 pt-4">
+            <p class="text-muted small mb-1 outfit">Developed by DeepMind Advanced Agentic Coding Team — Antigravity</p>
+            <p class="text-muted x-small opacity-50 mb-0">Disclaimer: This tool is for educational and research purposes only. Not for clinical diagnostic use.</p>
+        </div>
+    </footer>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        const API = window.location.origin;
+        const dropZone = document.getElementById('dropZone');
+        const imageInput = document.getElementById('imageInput');
+        const previewContainer = document.getElementById('previewContainer');
+        const uploadContent = document.getElementById('uploadContent');
+        const imagePreview = document.getElementById('imagePreview');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+
+        // Drag & Drop Handlers
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+            dropZone.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }, false);
+        });
+
+        dropZone.addEventListener('dragover', () => dropZone.classList.add('dragover'));
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', e => {
+            dropZone.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith('image/')) handleFile(file);
+        });
+
+        imageInput.addEventListener('change', e => {
+            if (e.target.files[0]) handleFile(e.target.files[0]);
+        });
+
+        function handleFile(file) {
+            const reader = new FileReader();
+            reader.onload = e => {
+                imagePreview.src = e.target.result;
+                previewContainer.classList.remove('d-none');
+                uploadContent.classList.add('d-none');
+                dropZone.classList.add('has-file');
+            };
+            reader.readAsDataURL(file);
+            
+            // Sync with hidden input for form submission
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            imageInput.files = dt.files;
+        }
+
+        function removeImage() {
+            imageInput.value = "";
+            imagePreview.src = "";
+            previewContainer.classList.add('d-none');
+            uploadContent.classList.remove('d-none');
+            dropZone.classList.remove('has-file');
+        }
+
+        function loadExample() {
+            document.getElementById('clinicalText').value = "65 y/o male with history of COPD presents with worsening dyspnea and productive cough (yellow sputum) for 3 days. Patient reports high-grade fever (102F) and pleuritic chest pain. PMH: Hypertension, Type 2 Diabetes. Physical exam reveals crackles at the right lung base and decreased oxygen saturation (88% on room air). Started on empiric antibiotics (Ceftriaxone + Azithromycin).";
+        }
+
+        async function performAnalysis() {
+            const file = imageInput.files[0];
+            const text = document.getElementById('clinicalText').value.trim();
+
+            if (!file && !text) {
+                alert("Please provide at least one input (X-ray image or clinical text).");
+                return;
+            }
+
+            // UI State
+            loadingOverlay.style.display = 'flex';
+            document.getElementById('analyzeBtn').disabled = true;
+            resetSteps();
+
+            const form = new FormData();
+            if (file) form.append('image', file);
+            if (text) form.append('text', text);
+
+            // Simulated progress steps
+            let currentStep = 0;
+            const stepInterval = setInterval(() => {
+                if (currentStep < 5) {
+                    updateStep(currentStep, 'active');
+                    if (currentStep > 0) updateStep(currentStep - 1, 'completed');
+                    currentStep++;
+                }
+            }, 1000);
+
+            try {
+                const startTime = performance.now();
+                const res = await fetch(`${API}/predict`, { method: 'POST', body: form });
+                const data = await res.json();
+                
+                clearInterval(stepInterval);
+                const totalTime = ((performance.now() - startTime) / 1000).toFixed(2);
+
+                if (!data.success) {
+                    throw new Error(data.error || "Backend pipeline failure");
+                }
+
+                renderResults(data);
+                document.getElementById('totalTime').textContent = `${data.total_time_seconds || totalTime}s`;
+                
+                // Finalize overlay
+                for(let i=0; i<6; i++) updateStep(i, 'completed');
+                setTimeout(() => loadingOverlay.style.display = 'none', 500);
+
+            } catch (err) {
+                clearInterval(stepInterval);
+                loadingOverlay.style.display = 'none';
+                alert("Analysis failed: " + err.message);
+                console.error(err);
+            } finally {
+                document.getElementById('analyzeBtn').disabled = false;
+            }
+        }
+
+        function updateStep(idx, state) {
+            const el = document.getElementById(`step-${idx}`);
+            if (!el) return;
+            el.classList.remove('active', 'completed');
+            if (state) el.classList.add(state);
+        }
+
+        function resetSteps() {
+            for(let i=0; i<6; i++) {
+                const el = document.getElementById(`step-${i}`);
+                el.classList.remove('active', 'completed');
+            }
+        }
+
+        function renderResults(data) {
+            document.getElementById('results').style.display = 'flex';
+            document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+
+            // Timings
+            const t = data.timings || {};
+            setTiming('timePred', t.disease_prediction);
+            setTiming('timeHeatmap', t.heatmap);
+            setTiming('timeNER', t.ner_extraction);
+            setTiming('timeSummary', t.summarization);
+            setTiming('timeTriage', t.triage);
+
+            // 1. Disease Predictions
+            const dl = document.getElementById('diseaseList');
+            if (data.disease_predictions) {
+                const sorted = Object.entries(data.disease_predictions).sort((a,b) => b[1] - a[1]);
+                dl.innerHTML = sorted.map(([name, prob]) => {
+                    const pct = (prob * 100).toFixed(1);
+                    const colorClass = prob >= 0.5 ? 'bg-high' : (prob >= 0.2 ? 'bg-med' : 'bg-low');
+                    return `
+                        <div class="disease-item">
+                            <div class="disease-label outfit">
+                                <span>${name}</span>
+                                <span>${pct}%</span>
+                            </div>
+                            <div class="progress">
+                                <div class="progress-bar ${colorClass}" style="width: ${pct}%"></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                renderError(dl, "Radiology model bypassed or unavailable", data.pipeline_steps?.disease_prediction?.message);
+            }
+
+            // 2. Heatmap
+            const hc = document.getElementById('heatmapContainer');
+            if (data.heatmap_base64) {
+                hc.innerHTML = `
+                    <img src="data:image/png;base64,${data.heatmap_base64}" alt="Interpretability Heatmap">
+                    <button class="btn btn-sm btn-dark opacity-75 heatmap-overlay-toggle outfit" onmousedown="toggleOverlay(true)" onmouseup="toggleOverlay(false)" ontouchstart="toggleOverlay(true)" ontouchend="toggleOverlay(false)">HOLD TO COMPARE</button>
+                `;
+            } else {
+                renderError(hc, "Attention map skipped", data.pipeline_steps?.heatmap?.message);
+            }
+
+            // 3. Triage
+            const tc = document.getElementById('triageContent');
+            if (data.triage) {
+                const tr = data.triage;
+                const score = tr.score || 0;
+                const level = tr.level || 5;
+                const offset = 440 - (440 * score);
+                const colors = { 1: '#ff7675', 2: '#fab1a0', 3: '#ffeaa7', 4: '#55efc4', 5: '#a0a0c0' };
+                const color = colors[level] || '#fff';
+
+                tc.innerHTML = `
+                    <div class="score-circle">
+                        <svg>
+                            <circle class="bg" cx="75" cy="75" r="70"></circle>
+                            <circle class="val" cx="75" cy="75" r="70" style="stroke: ${color}; stroke-dashoffset: ${offset}"></circle>
+                        </svg>
+                        <div class="score-text">
+                            <div class="score-num outfit" style="color: ${color}">${(score * 100).toFixed(0)}</div>
+                            <div class="score-label outfit">Severity Index</div>
+                        </div>
+                    </div>
+                    <div class="urgency-badge urgency-${level} outfit">${tr.label || 'Standard'}</div>
+                `;
+            } else {
+                renderError(tc, "Triage fusion skipped");
+            }
+
+            // 4. NER Entities
+            const ec = document.getElementById('entityContent');
+            if (data.entities) {
+                const cats = [
+                    { key: 'symptoms', icon: 'thermometer-half', label: 'Symptoms' },
+                    { key: 'diseases', icon: 'virus', label: 'Conditions' },
+                    { key: 'medications', icon: 'capsule', label: 'Therapeutics' },
+                    { key: 'risk_factors', icon: 'shield-exclamation', label: 'Risk Factors' }
+                ];
+                let html = '';
+                cats.forEach(c => {
+                    const ents = data.entities[c.key] || [];
+                    if (ents.length > 0) {
+                        html += `
+                            <div class="mb-3">
+                                <h6 class="text-muted small outfit mb-2"><i class="bi bi-${c.icon} me-2"></i>${c.label}</h6>
+                                <div class="d-flex flex-wrap">
+                                    ${ents.map(e => `<span class="entity-chip chip-${c.key}">${e.text}</span>`).join('')}
+                                </div>
+                            </div>
+                        `;
+                    }
+                });
+                ec.innerHTML = html || '<p class="text-muted outfit small">No clinical entities detected.</p>';
+            } else {
+                renderError(ec, "NER service inactive", data.pipeline_steps?.ner_extraction?.message);
+            }
+
+            // 5. Summary
+            const sc = document.getElementById('summaryContent');
+            if (data.summary) {
+                sc.innerHTML = `<div class="summary-content">${data.summary}</div>`;
+            } else {
+                renderError(sc, "Summarization unavailable", data.pipeline_steps?.summarization?.message);
+            }
+        }
+
+        function setTiming(id, val) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val ? `${val}s` : '---';
+        }
+
+        function renderError(container, title, detail) {
+            container.innerHTML = `
+                <div class="card-error">
+                    <i class="bi bi-slash-circle"></i>
+                    <h6 class="outfit">${title}</h6>
+                    ${detail ? `<p class="mt-2 outfit">${detail}</p>` : ''}
+                </div>
+            `;
+        }
+
+        function toggleOverlay(isOriginal) {
+            const img = document.querySelector('#heatmapContainer img');
+            if (!img) return;
+            img.style.filter = isOriginal ? 'grayscale(1) contrast(1.2) brightness(0.8)' : 'none';
+        }
+    </script>
+</body>
+</html>
