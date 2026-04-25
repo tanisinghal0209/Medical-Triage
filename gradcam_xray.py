@@ -100,20 +100,45 @@ class GradCAM:
     def __init__(
         self,
         model: nn.Module,
-        target_layer: nn.Module,
+        target_layer: Optional[nn.Module] = None,
     ):
         self.model = model
         self.target_layer = target_layer
 
+        # Auto-detect target layer if not provided
+        if self.target_layer is None:
+            if hasattr(model, "convnextv2"): # ConvNeXt V2 (Hugging Face)
+                if hasattr(model.convnextv2, "encoder"):
+                    self.target_layer = model.convnextv2.encoder.stages[-1]
+                else:
+                    self.target_layer = model.convnextv2.stages[-1]
+                log.info("GradCAM: Auto-detected ConvNeXt V2 target layer")
+            elif hasattr(model, "backbone") and hasattr(model.backbone, "layer4"):
+                self.target_layer = model.backbone.layer4
+                log.info("GradCAM: Auto-detected ResNet50 target layer (layer4)")
+            elif hasattr(model, "features"):
+                self.target_layer = model.features[-1]
+                log.info("GradCAM: Auto-detected MobileNetV2 target layer (features[-1])")
+            else:
+                # Fallback: find the last conv layer
+                for module in reversed(list(model.modules())):
+                    if isinstance(module, nn.Conv2d):
+                        self.target_layer = module
+                        log.info(f"GradCAM: Using last detected Conv2d layer: {module}")
+                        break
+        
+        if self.target_layer is None:
+            raise ValueError("Could not auto-detect target layer. Please provide one explicitly.")
+
         # Storage for hooked tensors
-        self._activations: Optional[torch.Tensor] = None  # [B, C, H, W]
-        self._gradients: Optional[torch.Tensor] = None     # [B, C, H, W]
+        self._activations: Optional[torch.Tensor] = None
+        self._gradients: Optional[torch.Tensor] = None
 
         # Register hooks
-        self._fwd_hook = target_layer.register_forward_hook(self._forward_hook)
-        self._bwd_hook = target_layer.register_full_backward_hook(self._backward_hook)
+        self._fwd_hook = self.target_layer.register_forward_hook(self._forward_hook)
+        self._bwd_hook = self.target_layer.register_full_backward_hook(self._backward_hook)
 
-        log.debug(f"GradCAM hooks registered on: {target_layer.__class__.__name__}")
+        log.debug(f"GradCAM hooks registered on: {self.target_layer.__class__.__name__}")
 
     # ── Hook callbacks ────────────────────────────────────────────────────────
 
@@ -164,7 +189,13 @@ class GradCAM:
         # ── Step 1: Forward pass ──────────────────────────────────────────────
         # We need gradients for the activations, so we enable grad
         input_tensor = input_tensor.requires_grad_(True)
-        logits = self.model(input_tensor)  # [B, num_classes]
+        output = self.model(input_tensor)
+        
+        # Handle Hugging Face output objects (ImageClassifierOutput)
+        if hasattr(output, "logits"):
+            logits = output.logits
+        else:
+            logits = output  # Standard tensor
 
         # ── Step 2: Select target class ───────────────────────────────────────
         if class_idx is None:
@@ -176,8 +207,6 @@ class GradCAM:
         self.model.zero_grad()
 
         # Create a one-hot target for the selected class
-        # We backprop the raw logit (not softmax/sigmoid) — this is standard
-        # for Grad-CAM as it captures the model's internal reasoning
         target_logit = logits[0, class_idx]
         target_logit.backward(retain_graph=True)
 
@@ -207,7 +236,7 @@ class GradCAM:
         else:
             cam = torch.zeros_like(cam)
 
-        # ── Step 7: Resize to input spatial dimensions ────────────────────────
+        # ── Step 7: Resize to input spatial dimensions with Smoothing ─────────
         _, _, H_in, W_in = input_tensor.shape
         cam = F.interpolate(
             cam,
@@ -215,6 +244,19 @@ class GradCAM:
             mode="bilinear",
             align_corners=False,
         )
+
+        # Convert to numpy for final smoothing
+        cam_np = cam.squeeze().detach().cpu().numpy()
+        
+        # Optional: Add a light Gaussian blur to make it "lovely" (Smooth)
+        from scipy.ndimage import gaussian_filter
+        cam_np = gaussian_filter(cam_np, sigma=H_in/50) # Scale sigma with resolution
+        
+        # Final Min-Max normalization
+        if cam_np.max() > 0:
+            cam_np = (cam_np - cam_np.min()) / (cam_np.max() - cam_np.min() + 1e-8)
+            
+        return cam_np
 
         # Convert to numpy [H, W]
         heatmap = cam.squeeze().cpu().numpy()
@@ -432,7 +474,12 @@ def generate_heatmap(
     # ── Resolve target layer ──────────────────────────────────────────────────
     if target_layer is None:
         # Detect backbone type and pick appropriate target layer
-        if hasattr(model, "backbone"):
+        if hasattr(model, "convnextv2"): # ConvNeXt V2 (Hugging Face)
+            if hasattr(model.convnextv2, "encoder"):
+                target_layer = model.convnextv2.encoder.stages[-1]
+            else:
+                target_layer = model.convnextv2.stages[-1]
+        elif hasattr(model, "backbone"):
             bb = model.backbone
             if hasattr(bb, "layer4"):  # ResNet50
                 target_layer = bb.layer4
@@ -630,7 +677,8 @@ def generate_all_class_heatmaps(
 
     model.eval()
     with torch.no_grad():
-        logits = model(input_tensor)
+        output = model(input_tensor)
+        logits = output.logits if hasattr(output, "logits") else output
         probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()
 
     # ── Select top-K classes ──────────────────────────────────────────────────
@@ -743,7 +791,8 @@ def visualize_samples(
 
             model.eval()
             with torch.no_grad():
-                logits = model(input_tensor)
+                output = model(input_tensor)
+                logits = output.logits if hasattr(output, "logits") else output
                 probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()
 
             # ── Determine target class ────────────────────────────────────────

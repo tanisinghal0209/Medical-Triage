@@ -66,6 +66,10 @@ class ImageService:
 
     def __init__(self):
         self.model = None
+        self.processor = None          # HF AutoImageProcessor (ConvNeXtV2 only)
+        self._is_hf_model = False
+        self._disease_classes = []     # populated during _load()
+        self._num_classes = 0
         self._available = False
         self._load()
 
@@ -78,47 +82,83 @@ class ImageService:
             )
             
             self._predict_fn = predict_image
-            self._config = ModelConfig()
-            self._config.OUTPUT_ROOT = str(Path("./chest_xray_pipeline").resolve())
-            
-            # Paths to possible checkpoints (Check BEST first, then LAST)
-            best_path = Path("./chest_xray_pipeline/checkpoints/best_model.pth")
-            last_path = Path("./chest_xray_pipeline/checkpoints/last_model.pth")
-            
-            ckpt_path = best_path if best_path.exists() else last_path
-            
-            if ckpt_path.exists():
-                # Detect model type from checkpoint
-                checkpoint = torch.load(str(ckpt_path), map_location="cpu")
-                
-                # Check if it's a MobileNetV2 (from train_pneumonia.py) or ResNet50 (from chest_xray_model.py)
-                is_mobilenet = "features.0.0.weight" in checkpoint.get("model_state_dict", {})
-                
-                if is_mobilenet:
-                    log.info("Detected MobileNetV2 (Pneumonia Binary) checkpoint")
-                    self.model = models.mobilenet_v2(weights=None)
-                    in_features = self.model.classifier[1].in_features
-                    self.model.classifier = torch.nn.Sequential(
-                        torch.nn.Dropout(0.3),
-                        torch.nn.Linear(in_features, 2),
-                    )
-                    self.model.load_state_dict(checkpoint["model_state_dict"])
-                    self._config.DISEASE_CLASSES = ["NORMAL", "PNEUMONIA"]
-                    self._config.NUM_CLASSES = 2
-                else:
-                    log.info("Detected Multi-label checkpoint")
-                    self.model = ChestXRayModel(self._config)
-                    self.model.load_state_dict(checkpoint["model_state_dict"])
-                
-                # Detect the best available device (MPS for Mac)
-                device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+
+            # ── Path to HF ConvNeXtV2 checkpoint ─────────────────────────────
+            convnext_path = Path("./convnextv2-nih-results/checkpoint-2128")
+            if not convnext_path.exists():
+                # Fallback to the latest checkpoint if the expected one is absent
+                checkpoints = sorted(Path("./convnextv2-nih-results").glob("checkpoint-*"))
+                if checkpoints:
+                    convnext_path = checkpoints[-1]
+
+            if convnext_path.exists() and (convnext_path / "config.json").exists():
+                log.info(f"🚀 Detected ConvNeXt V2 HF model at {convnext_path}")
+                from transformers import AutoModelForImageClassification, AutoImageProcessor
+
+                self.processor = AutoImageProcessor.from_pretrained(str(convnext_path))
+                self.model = AutoModelForImageClassification.from_pretrained(str(convnext_path))
+
+                # Store labels from the HF config — id2label is {"0": "Atelectasis", ...}
+                id2label = self.model.config.id2label
+                self._disease_classes = [
+                    id2label[k] for k in sorted(id2label.keys(), key=lambda x: int(x))
+                ]
+                self._num_classes = len(self._disease_classes)
+
+                device = torch.device(
+                    "mps" if torch.backends.mps.is_available()
+                    else "cuda" if torch.cuda.is_available()
+                    else "cpu"
+                )
                 self.model.to(device)
                 self.model.eval()
-                log.info(f"✓ Image model loaded and moved to {device} from {ckpt_path}")
+                self._is_hf_model = True
+                log.info(f"✓ ConvNeXt V2 ({self._num_classes} classes) loaded → {device}")
+                log.info(f"  Classes: {self._disease_classes}")
             else:
-                log.warning("⚠ No checkpoint found — using untrained model for demo")
-                self.model = ChestXRayModel(self._config)
-                self.model.eval()
+                # ── Fallback: legacy .pth checkpoint ─────────────────────────
+                self._is_hf_model = False
+                cfg = ModelConfig()
+                best_path = Path("./chest_xray_pipeline/checkpoints/best_model.pth")
+                last_path = Path("./chest_xray_pipeline/checkpoints/last_model.pth")
+                ckpt_path = best_path if best_path.exists() else last_path
+
+                if ckpt_path.exists():
+                    checkpoint = torch.load(str(ckpt_path), map_location="cpu")
+                    is_mobilenet = "features.0.0.weight" in checkpoint.get("model_state_dict", {})
+
+                    if is_mobilenet:
+                        log.info("Detected MobileNetV2 (Pneumonia Binary) checkpoint")
+                        self.model = models.mobilenet_v2(weights=None)
+                        in_features = self.model.classifier[1].in_features
+                        self.model.classifier = torch.nn.Sequential(
+                            torch.nn.Dropout(0.3),
+                            torch.nn.Linear(in_features, 2),
+                        )
+                        self.model.load_state_dict(checkpoint["model_state_dict"])
+                        self._disease_classes = ["NORMAL", "PNEUMONIA"]
+                        self._num_classes = 2
+                    else:
+                        log.info("Detected multi-label .pth checkpoint")
+                        self.model = ChestXRayModel(cfg)
+                        self.model.load_state_dict(checkpoint["model_state_dict"])
+                        self._disease_classes = cfg.DISEASE_CLASSES
+                        self._num_classes = cfg.NUM_CLASSES
+
+                    device = torch.device(
+                        "mps" if torch.backends.mps.is_available()
+                        else "cuda" if torch.cuda.is_available()
+                        else "cpu"
+                    )
+                    self.model.to(device)
+                    self.model.eval()
+                    log.info(f"✓ .pth model loaded and moved to {device}")
+                else:
+                    log.warning("⚠ No checkpoint found — using untrained model for demo")
+                    self.model = ChestXRayModel(cfg)
+                    self._disease_classes = cfg.DISEASE_CLASSES
+                    self._num_classes = cfg.NUM_CLASSES
+                    self.model.eval()
 
             self._available = True
         except Exception as e:
@@ -129,9 +169,33 @@ class ImageService:
     def predict(self, image_path: str) -> Dict[str, float]:
         if not self._available:
             raise RuntimeError("Image model not available")
+
         import torch
-        with torch.inference_mode():
-            return self._predict_fn(image_path, model=self.model, cfg=self._config)
+
+        if self._is_hf_model:
+            # ── ConvNeXtV2 (Hugging Face) sigmoid multi-label inference ───────
+            from PIL import Image as PILImage
+            img = PILImage.open(image_path).convert("RGB")
+
+            # Resolve device from model parameters (HF models have no .device attr)
+            device = next(self.model.parameters()).device
+            inputs = self.processor(images=img, return_tensors="pt").to(device)
+
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                # problem_type="multi_label_classification" → sigmoid, NOT softmax
+                probs = torch.sigmoid(outputs.logits).squeeze().cpu().numpy()
+
+            results = {
+                self._disease_classes[i]: float(probs[i])
+                for i in range(len(self._disease_classes))
+            }
+            # Sort descending by probability
+            return dict(sorted(results.items(), key=lambda x: x[1], reverse=True))
+        else:
+            # ── Legacy .pth pipeline ──────────────────────────────────────────
+            with torch.inference_mode():
+                return self._predict_fn(image_path, model=self.model)
 
     @property
     def available(self) -> bool:
@@ -163,22 +227,33 @@ class HeatmapService:
         if not self._available:
             raise RuntimeError("Heatmap service not available")
 
-        # Auto-detect target layer based on model type
+        # ── Auto-detect Grad-CAM target layer based on model architecture ────
         model = self.image_service.model
         target_layer = None
-        if hasattr(model, "backbone") and hasattr(model.backbone, "layer4"):
+
+        if hasattr(model, "convnextv2"):  # ConvNeXtV2ForImageClassification (HF)
+            # HF ConvNeXtV2: model.convnextv2.encoder.stages is the correct path
+            if hasattr(model.convnextv2, "encoder") and hasattr(model.convnextv2.encoder, "stages"):
+                target_layer = model.convnextv2.encoder.stages[-1]
+                log.info("Grad-CAM target: convnextv2.encoder.stages[-1]")
+            else:
+                # Older HF versions may not have encoder wrapper
+                target_layer = model.convnextv2.stages[-1]
+                log.info("Grad-CAM target: convnextv2.stages[-1] (fallback)")
+        elif hasattr(model, "backbone") and hasattr(model.backbone, "layer4"):  # ResNet50
             target_layer = model.backbone.layer4
-        elif hasattr(model, "features"): # MobileNetV2
+        elif hasattr(model, "features"):  # MobileNetV2
             target_layer = model.features[-1]
-        
+
         import torch
-        # Grad-CAM REQUIRES gradients to compute importance weights
+        # Grad-CAM REQUIRES gradients — disable torch.no_grad context here
         with torch.set_grad_enabled(True):
             overlay_image = self._generate_fn(
                 image_path,
                 model=model,
                 target_class=target_class,
                 target_layer=target_layer,
+                class_names=self.image_service._disease_classes,
             )
 
         # Convert PIL Image → base64 PNG
