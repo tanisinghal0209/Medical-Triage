@@ -38,7 +38,7 @@ ARCHITECTURE:
               └─────────────┘
 
 DEPENDS ON:
-  - chest_xray_model.py  (Step 2) — disease probabilities
+  - train_convnextv2.py (ConvNeXtV2) — disease probabilities
   - clinical_ner.py      (Step 4) — entity extraction
   - clinical_summarizer.py (Step 5) — text summaries (optional)
 
@@ -1534,7 +1534,7 @@ def run_full_pipeline(
     End-to-end multi-modal fusion demonstrating the complete pipeline.
 
     Connects all four pipeline modules:
-      1. chest_xray_model.py   → image_probs  (disease probabilities)
+      1. train_convnextv2.py   → image_probs  (ConvNeXtV2 probabilities)
       2. clinical_ner.py       → ner_entities  (structured entities)
       3. clinical_summarizer.py → summary_text (optional summary)
       4. triage_fusion.py      → triage score  (urgency 0–1)

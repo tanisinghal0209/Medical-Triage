@@ -4,7 +4,7 @@
 ==============================================================================
 
  Integrates all five ML components into a single REST API:
-   1. chest_xray_model.py  → Disease probability predictions
+   1. train_convnextv2.py  → ConvNeXtV2 disease probabilities
    2. gradcam_xray.py      → Grad-CAM heatmap overlays
    3. clinical_ner.py       → Named Entity Recognition
    4. clinical_summarizer.py → Clinical text summarization
@@ -62,7 +62,7 @@ HEATMAP_DIR.mkdir(parents=True, exist_ok=True)
 # ==============================================================================
 
 class ImageService:
-    """Wraps chest_xray_model.py for disease prediction."""
+    """Wraps ConvNeXtV2 (via HF Transformers) for disease prediction."""
 
     def __init__(self):
         self.model = None

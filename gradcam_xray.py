@@ -4,8 +4,8 @@
   Chest X-Ray Multi-Label Classifier
   Gradient-weighted Class Activation Mapping (Grad-CAM)
 
-  Compatible with: chest_xray_model.py  (Step 2)
-  Backbone target: ResNet50 → layer4 (last conv block)
+  Compatible with: train_convnextv2.py (Hugging Face)
+  Backbone target: ConvNeXtV2 → stages[-1] (last stage)
 ================================================================================
 
 IMPLEMENTS:
@@ -87,9 +87,9 @@ class GradCAM:
     └─────────────────────────────────────────────────────────────────────┘
 
     Args:
-        model       : Trained ChestXRayResNet50 (or any nn.Module)
-        target_layer: The conv layer to visualize (e.g., model.backbone.layer4)
-                      Defaults to the last residual block for ResNet50
+        model       : Trained ConvNeXtV2 (or any nn.Module)
+        target_layer: The conv layer to visualize (e.g., model.convnextv2.stages[-1])
+                      Defaults to the last stage for ConvNeXtV2
 
     Usage:
         cam = GradCAM(model, model.backbone.layer4)
@@ -115,7 +115,7 @@ class GradCAM:
                 log.info("GradCAM: Auto-detected ConvNeXt V2 target layer")
             elif hasattr(model, "backbone") and hasattr(model.backbone, "layer4"):
                 self.target_layer = model.backbone.layer4
-                log.info("GradCAM: Auto-detected ResNet50 target layer (layer4)")
+                log.info("GradCAM: Auto-detected ResNet50 (legacy) target layer (layer4)")
             elif hasattr(model, "features"):
                 self.target_layer = model.features[-1]
                 log.info("GradCAM: Auto-detected MobileNetV2 target layer (features[-1])")
@@ -288,7 +288,7 @@ class GradCAM:
 def get_inference_transform(image_size: int = 224) -> T.Compose:
     """
     Returns the standard inference transform matching the training pipeline.
-    Must be identical to the val/test transform used in chest_xray_model.py.
+    Must be identical to the val/test transform used in the training script.
     """
     return T.Compose([
         T.Resize((image_size, image_size)),
@@ -444,7 +444,7 @@ def generate_heatmap(
 
     Args:
         image_path   : Path to the input X-ray image.
-        model        : Trained ChestXRayResNet50 model.
+        model        : Trained ConvNeXtV2 model.
         target_class : Which disease class to visualize.
                        - int: class index (0–13)
                        - str: disease name (e.g., "Pneumonia")
@@ -572,10 +572,10 @@ def generate_heatmaps_batch(
 
     Args:
         image_paths  : List of paths to X-ray images.
-        model        : Trained ChestXRayResNet50 model.
+        model        : Trained ConvNeXtV2 model.
         target_class : Disease class to visualize (shared across batch).
                        Same format as generate_heatmap().
-        target_layer : Conv layer to hook. Defaults to model.backbone.layer4.
+        target_layer : Conv layer to hook. Defaults to model.convnextv2.stages[-1].
         alpha        : Heatmap transparency.
         colormap     : Colormap for heatmap.
         device       : Compute device.
@@ -735,7 +735,7 @@ def visualize_samples(
 
     Args:
         image_paths      : List of image file paths.
-        model            : Trained ChestXRayResNet50 model.
+        model            : Trained ConvNeXtV2 model.
         target_class     : Disease class to highlight (None = auto top-1).
         target_layer     : Target conv layer for Grad-CAM hooks.
         alpha            : Heatmap overlay transparency.
@@ -1100,16 +1100,15 @@ def _run_smoke_test() -> None:
     log.info("=" * 60)
 
     # ── Import the model class ────────────────────────────────────────────────
-    # Try to import from chest_xray_model; fall back to a minimal ResNet50
+    # Legacy: Try to import from chest_xray_model; fall back to a minimal ResNet50
     try:
-        sys.path.insert(0, str(Path(__file__).parent.parent / "Downloads"))
-        sys.path.insert(0, str(Path(__file__).parent))
+        sys.path.insert(0, str(Path(__file__).parent / "legacy_models"))
         from chest_xray_model import ChestXRayResNet50, ModelConfig
         cfg = ModelConfig()
         model = ChestXRayResNet50(cfg)
-        log.info("  Using ChestXRayResNet50 from chest_xray_model.py")
+        log.info("  Using ChestXRayResNet50 from legacy_models/")
     except ImportError:
-        log.info("  chest_xray_model.py not found — building minimal ResNet50")
+        log.info("  Legacy model files not found — building minimal ResNet50 for test")
         import torchvision.models as tv_models
         model = tv_models.resnet50(weights=None)
         model.fc = nn.Linear(2048, 14)
@@ -1221,7 +1220,7 @@ def main():
         python gradcam_xray.py --smoke-test
     """
     parser = argparse.ArgumentParser(
-        description="Grad-CAM for Chest X-Ray ResNet50 Model",
+        description="Grad-CAM for Chest X-Ray ConvNeXtV2 Model",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=main.__doc__,
     )
