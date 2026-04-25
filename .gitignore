@@ -27,6 +27,7 @@ wheels/
 *.h5
 *.weights
 convnextv2-nih-results/
+legacy_models/
 chest_xray_pipeline/checkpoints/
 chest_xray_pipeline/results/
 chest_xray_pipeline/plots/

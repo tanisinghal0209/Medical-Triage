@@ -1302,17 +1302,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info(f"Device: {device}")
 
-    try:
-        sys.path.insert(0, str(Path(__file__).parent.parent / "Downloads"))
-        sys.path.insert(0, str(Path(__file__).parent))
-        from chest_xray_model import load_model
-        model = load_model(args.checkpoint, device=device)
-    except ImportError:
-        log.error(
-            "Cannot import chest_xray_model.py. "
-            "Ensure it's in the same directory or parent/Downloads."
-        )
-        sys.exit(1)
+    # Legacy model loading disabled to support project cleanup
+    # from chest_xray_model import load_model
+    # model = load_model(args.checkpoint, device=device)
+    log.warning("CLI model loading currently disabled. Use the web interface (app.py) for Grad-CAM.")
+    sys.exit(0)
 
     # ── Resolve target class ──────────────────────────────────────────────────
     target_class = args.target_class

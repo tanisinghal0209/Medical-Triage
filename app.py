@@ -77,13 +77,8 @@ class ImageService:
         try:
             import torch
             from torchvision import models
-            from chest_xray_model import (
-                ChestXRayModel, ModelConfig, load_model, predict_image,
-            )
             
-            self._predict_fn = predict_image
-
-            # ── Path to HF ConvNeXtV2 checkpoint ─────────────────────────────
+            # ConvNeXtV2 paths
             convnext_path = Path("./convnextv2-nih-results/checkpoint-2128")
             if not convnext_path.exists():
                 # Fallback to the latest checkpoint if the expected one is absent
@@ -116,49 +111,9 @@ class ImageService:
                 log.info(f"✓ ConvNeXt V2 ({self._num_classes} classes) loaded → {device}")
                 log.info(f"  Classes: {self._disease_classes}")
             else:
-                # ── Fallback: legacy .pth checkpoint ─────────────────────────
-                self._is_hf_model = False
-                cfg = ModelConfig()
-                best_path = Path("./chest_xray_pipeline/checkpoints/best_model.pth")
-                last_path = Path("./chest_xray_pipeline/checkpoints/last_model.pth")
-                ckpt_path = best_path if best_path.exists() else last_path
-
-                if ckpt_path.exists():
-                    checkpoint = torch.load(str(ckpt_path), map_location="cpu")
-                    is_mobilenet = "features.0.0.weight" in checkpoint.get("model_state_dict", {})
-
-                    if is_mobilenet:
-                        log.info("Detected MobileNetV2 (Pneumonia Binary) checkpoint")
-                        self.model = models.mobilenet_v2(weights=None)
-                        in_features = self.model.classifier[1].in_features
-                        self.model.classifier = torch.nn.Sequential(
-                            torch.nn.Dropout(0.3),
-                            torch.nn.Linear(in_features, 2),
-                        )
-                        self.model.load_state_dict(checkpoint["model_state_dict"])
-                        self._disease_classes = ["NORMAL", "PNEUMONIA"]
-                        self._num_classes = 2
-                    else:
-                        log.info("Detected multi-label .pth checkpoint")
-                        self.model = ChestXRayModel(cfg)
-                        self.model.load_state_dict(checkpoint["model_state_dict"])
-                        self._disease_classes = cfg.DISEASE_CLASSES
-                        self._num_classes = cfg.NUM_CLASSES
-
-                    device = torch.device(
-                        "mps" if torch.backends.mps.is_available()
-                        else "cuda" if torch.cuda.is_available()
-                        else "cpu"
-                    )
-                    self.model.to(device)
-                    self.model.eval()
-                    log.info(f"✓ .pth model loaded and moved to {device}")
-                else:
-                    log.warning("⚠ No checkpoint found — using untrained model for demo")
-                    self.model = ChestXRayModel(cfg)
-                    self._disease_classes = cfg.DISEASE_CLASSES
-                    self._num_classes = cfg.NUM_CLASSES
-                    self.model.eval()
+                log.error("✗ ConvNeXt V2 checkpoint not found!")
+                self._available = False
+                return
 
             self._available = True
         except Exception as e:
@@ -177,25 +132,21 @@ class ImageService:
             from PIL import Image as PILImage
             img = PILImage.open(image_path).convert("RGB")
 
-            # Resolve device from model parameters (HF models have no .device attr)
+            # Resolve device from model parameters
             device = next(self.model.parameters()).device
             inputs = self.processor(images=img, return_tensors="pt").to(device)
 
             with torch.no_grad():
                 outputs = self.model(**inputs)
-                # problem_type="multi_label_classification" → sigmoid, NOT softmax
                 probs = torch.sigmoid(outputs.logits).squeeze().cpu().numpy()
 
             results = {
                 self._disease_classes[i]: float(probs[i])
                 for i in range(len(self._disease_classes))
             }
-            # Sort descending by probability
             return dict(sorted(results.items(), key=lambda x: x[1], reverse=True))
         else:
-            # ── Legacy .pth pipeline ──────────────────────────────────────────
-            with torch.inference_mode():
-                return self._predict_fn(image_path, model=self.model)
+            raise RuntimeError("Model is available but not recognized as an HF model.")
 
     @property
     def available(self) -> bool:
