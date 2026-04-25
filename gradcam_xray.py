@@ -1099,30 +1099,35 @@ def _run_smoke_test() -> None:
     log.info("  GRAD-CAM SMOKE TEST")
     log.info("=" * 60)
 
-    # ── Import the model class ────────────────────────────────────────────────
-    # Legacy: Try to import from chest_xray_model; fall back to a minimal ResNet50
-    try:
-        sys.path.insert(0, str(Path(__file__).parent / "legacy_models"))
-        from chest_xray_model import ChestXRayResNet50, ModelConfig
-        cfg = ModelConfig()
-        model = ChestXRayResNet50(cfg)
-        log.info("  Using ChestXRayResNet50 from legacy_models/")
-    except ImportError:
-        log.info("  Legacy model files not found — building minimal ResNet50 for test")
-        import torchvision.models as tv_models
-        model = tv_models.resnet50(weights=None)
-        model.fc = nn.Linear(2048, 14)
-        # Wrap in a namespace object so model.backbone.layer4 works
-        class _Wrapper(nn.Module):
-            def __init__(self, base):
-                super().__init__()
-                self.backbone = base
-                self.backbone.fc = nn.Identity()
-                self.classifier = nn.Linear(2048, 14)
-            def forward(self, x):
-                feat = self.backbone(x)
-                return self.classifier(feat)
-        model = _Wrapper(model)
+    # ── Create a dummy ConvNeXtV2 model for testing ───────────────────────────
+    log.info("  Building dummy ConvNeXtV2 for smoke test…")
+    import torchvision.models as tv_models
+    
+    # We use a standard torchvision convnext_tiny as a proxy for the HF structure
+    base_model = tv_models.convnext_tiny(weights=None)
+    
+    # Wrap it to mimic the Hugging Face structure used in the main app
+    class HFConvNeXtWrapper(nn.Module):
+        def __init__(self, base):
+            super().__init__()
+            self.convnextv2 = base # Mimic the .convnextv2 attribute
+            self.logits = nn.Linear(768, 14)
+            # Ensure it has the correct stage structure for the hook
+            self.convnextv2.encoder = base.features
+            
+        def forward(self, x):
+            # Simplified forward pass for testing
+            features = self.convnextv2.features(x)
+            pooled = self.convnextv2.avgpool(features)
+            logits = self.logits(pooled.flatten(1))
+            
+            # Mimic HF output object
+            from collections import namedtuple
+            Output = namedtuple("Output", ["logits"])
+            return Output(logits=logits)
+
+    model = HFConvNeXtWrapper(base_model)
+    model.eval()
 
     device = torch.device("cpu")
     model = model.to(device).eval()
@@ -1135,7 +1140,7 @@ def _run_smoke_test() -> None:
 
     # ── Test 1: GradCAM core ──────────────────────────────────────────────────
     log.info("  Test 1: GradCAM core computation…")
-    cam = GradCAM(model, model.backbone.layer4)
+    cam = GradCAM(model)
     input_tensor, _ = load_and_preprocess(tmp_img, device=device)
     heatmap = cam(input_tensor, class_idx=0)
     assert heatmap.shape == (224, 224), f"Bad shape: {heatmap.shape}"
